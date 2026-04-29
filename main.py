@@ -14,7 +14,10 @@ from lxml import etree
 
 CAPTURES_DIR = "captures"
 MAX_PHOTOS = 4
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_PATH = os.path.join(BASE_DIR, "template", "IL 30-1_r6_PT Record.docx")
 
 # Anchor positions from r5 template (left → right), all values in EMU
