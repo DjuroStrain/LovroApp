@@ -9,12 +9,98 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from docx import Document
-from docx.shared import Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from lxml import etree
 
 
 CAPTURES_DIR = "captures"
 MAX_PHOTOS = 4
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE_PATH = os.path.join(BASE_DIR, "template", "IL 30-1_r6_PT Record.docx")
+
+# Anchor positions from r5 template (left → right), all values in EMU
+_IMG_SLOTS = [
+    {'posH': -8255,   'cx': 929640},
+    {'posH': 1050925, 'cx': 929640},
+    {'posH': 2294255, 'cx': 929640},
+    {'posH': 3521075, 'cx': 929640},
+]
+_IMG_CY    = 1402080
+_IMG_POS_V = 24765
+
+_WP   = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+_WP14 = 'http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing'
+_A    = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+_PIC  = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
+_R    = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+_A14  = 'http://schemas.microsoft.com/office/drawing/2010/main'
+_W    = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+
+def _build_anchor(rId, idx, slot):
+    cx, cy = slot['cx'], _IMG_CY
+    xml = (
+        f'<wp:anchor'
+        f' xmlns:wp="{_WP}" xmlns:wp14="{_WP14}"'
+        f' xmlns:a="{_A}" xmlns:pic="{_PIC}"'
+        f' xmlns:r="{_R}" xmlns:a14="{_A14}"'
+        f' distT="0" distB="0" distL="114300" distR="114300"'
+        f' simplePos="0" relativeHeight="{251659264 + idx * 1024}"'
+        f' behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"'
+        f' wp14:anchorId="{0x15000000 + idx:08X}"'
+        f' wp14:editId="{0x10000000 + idx:08X}">'
+        f'<wp:simplePos x="0" y="0"/>'
+        f'<wp:positionH relativeFrom="column">'
+        f'  <wp:posOffset>{slot["posH"]}</wp:posOffset>'
+        f'</wp:positionH>'
+        f'<wp:positionV relativeFrom="paragraph">'
+        f'  <wp:posOffset>{_IMG_POS_V}</wp:posOffset>'
+        f'</wp:positionV>'
+        f'<wp:extent cx="{cx}" cy="{cy}"/>'
+        f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+        f'<wp:wrapNone/>'
+        f'<wp:docPr id="{100 + idx}" name="Photo {idx + 1}"/>'
+        f'<wp:cNvGraphicFramePr>'
+        f'  <a:graphicFrameLocks noChangeAspect="1"/>'
+        f'</wp:cNvGraphicFramePr>'
+        f'<a:graphic>'
+        f'  <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        f'    <pic:pic>'
+        f'      <pic:nvPicPr>'
+        f'        <pic:cNvPr id="0" name="Photo {idx + 1}"/>'
+        f'        <pic:cNvPicPr>'
+        f'          <a:picLocks noChangeAspect="1" noChangeArrowheads="1"/>'
+        f'        </pic:cNvPicPr>'
+        f'      </pic:nvPicPr>'
+        f'      <pic:blipFill>'
+        f'        <a:blip r:embed="{rId}">'
+        f'          <a:extLst>'
+        f'            <a:ext uri="{{28A0092B-C50C-407E-A947-70E740481C1C}}">'
+        f'              <a14:useLocalDpi val="0"/>'
+        f'            </a:ext>'
+        f'          </a:extLst>'
+        f'        </a:blip>'
+        f'        <a:stretch><a:fillRect/></a:stretch>'
+        f'      </pic:blipFill>'
+        f'      <pic:spPr bwMode="auto">'
+        f'        <a:xfrm>'
+        f'          <a:off x="0" y="0"/>'
+        f'          <a:ext cx="{cx}" cy="{cy}"/>'
+        f'        </a:xfrm>'
+        f'        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'        <a:noFill/>'
+        f'      </pic:spPr>'
+        f'    </pic:pic>'
+        f'  </a:graphicData>'
+        f'</a:graphic>'
+        f'<wp14:sizeRelH relativeFrom="page">'
+        f'  <wp14:pctWidth>0</wp14:pctWidth>'
+        f'</wp14:sizeRelH>'
+        f'<wp14:sizeRelV relativeFrom="page">'
+        f'  <wp14:pctHeight>0</wp14:pctHeight>'
+        f'</wp14:sizeRelV>'
+        f'</wp:anchor>'
+    )
+    return etree.fromstring(xml)
 
 
 class MainWindow(QMainWindow):
@@ -24,7 +110,6 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 620)
 
         self.captured_paths = []
-        self.doc = Document()
         self.camera = None
         self.timer = QTimer()
 
@@ -108,7 +193,7 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = os.path.join(CAPTURES_DIR, f"photo_{timestamp}.jpg")
         cv2.imwrite(filename, frame)
-        self.captured_paths.append(filename)
+        self.captured_paths.append(os.path.abspath(filename))
 
         count = len(self.captured_paths)
         self.counter_label.setText(f"Photos: {count} / {MAX_PHOTOS}")
@@ -118,24 +203,44 @@ class MainWindow(QMainWindow):
             self.save_btn.setEnabled(True)
 
     def save_document(self):
-        doc = Document()
-        table = doc.add_table(rows=1, cols=len(self.captured_paths))
+        doc = Document(TEMPLATE_PATH)
 
-        for i, path in enumerate(self.captured_paths):
-            cell = table.cell(0, i)
-            para = cell.paragraphs[0]
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = para.add_run()
-            try:
-                run.add_picture(path, width=Inches(4))
-            except Exception as e:
-                QMessageBox.critical(self, "Document Error", f"Failed to embed image {i + 1}:\n{e}")
-                return
+        rIds = []
+        for path in self.captured_paths:
+            rId, _ = doc.part.get_or_add_image(path)
+            rIds.append(rId)
+
+        # Find the empty paragraph after "Slika/Image:" in the table
+        target_para = None
+        for table in doc.tables:
+            if target_para:
+                break
+            for row in table.rows:
+                if target_para:
+                    break
+                for cell in row.cells:
+                    paras = cell.paragraphs
+                    for i, para in enumerate(paras):
+                        if 'Slika' in para.text and i + 1 < len(paras):
+                            target_para = paras[i + 1]
+                            break
+                    if target_para:
+                        break
+
+        if target_para is None:
+            QMessageBox.critical(self, "Template Error", "Could not find image placeholder in template.")
+            return
+
+        for idx, (rId, slot) in enumerate(zip(rIds, _IMG_SLOTS)):
+            anchor_el = _build_anchor(rId, idx, slot)
+            r_el = etree.SubElement(target_para._element, f'{{{_W}}}r')
+            drawing_el = etree.SubElement(r_el, f'{{{_W}}}drawing')
+            drawing_el.append(anchor_el)
 
         docs_folder = os.path.expanduser("~/Documents")
         os.makedirs(docs_folder, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        out_path = os.path.join(docs_folder, f"captures_{timestamp}.docx")
+        out_path = os.path.join(docs_folder, f"PT_Record_{timestamp}.docx")
 
         try:
             doc.save(out_path)
